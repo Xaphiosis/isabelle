@@ -81,9 +81,12 @@ class Theories_Dockable(view: View, position: String) extends Dockable(view, pos
   continuous_checking.focusable = false
 
   private val logic = JEdit_Sessions.logic_selector(true)
+  private val skip_proofs = new Isabelle.Skip_Proofs
+  skip_proofs.focusable = false
+
 
   private val controls =
-    new Wrap_Panel(Wrap_Panel.Alignment.Right)(continuous_checking, session_phase, logic)
+    new Wrap_Panel(Wrap_Panel.Alignment.Right)(skip_proofs, continuous_checking, session_phase, logic)
   add(controls.peer, BorderLayout.NORTH)
 
 
@@ -227,6 +230,7 @@ class Theories_Dockable(view: View, position: String) extends Dockable(view, pos
 
       case _: Session.Global_Options =>
         GUI_Thread.later {
+          skip_proofs.load()
           continuous_checking.load()
           logic.load ()
           update_nodes_required()

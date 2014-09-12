@@ -82,9 +82,9 @@ option command_timing_threshold : real = 0.01
 
 section "Detail of Proof Checking"
 
-option quick_and_dirty : bool = false
+public option quick_and_dirty : bool = false
   -- "if true then some tools will OMIT some proofs"
-option skip_proofs : bool = false
+public option skip_proofs : bool = false
   -- "skip over proofs (implicit 'sorry')"
 
 
