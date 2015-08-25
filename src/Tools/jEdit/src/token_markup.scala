@@ -118,6 +118,12 @@ object Token_Markup
     override def extendStyles(styles: Array[SyntaxStyle]): Array[SyntaxStyle] =
     {
       val new_styles = new Array[SyntaxStyle](full_range)
+
+      // override NULL style to be same color as default text, as
+      // it's hardcoded as black into the jEdit isabelle patch at
+      // jEdit-patched/org/gjt/sp/util/SyntaxUtilities.java
+      styles(0) = new SyntaxStyle(jEdit.getColorProperty("view.fgColor"), null, styles(0).getFont)
+
       for (i <- 0 until plain_range) {
         val style = styles(i)
         new_styles(i) = style
