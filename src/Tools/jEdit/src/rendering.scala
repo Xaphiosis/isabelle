@@ -900,6 +900,33 @@ class Rendering private(val snapshot: Document.Snapshot, val options: Options)
         })
   }
 
+  val range_elements_what = List(
+    "text_color", "squiggly", "line_background", "foreground",
+    "background", "bullet", "gutter")
+
+  def range_elements(range: Text.Range, what: String): List[Text.Info[String]] =
+  {
+    val elems = what match {
+      case "text_color" => text_color_elements
+      case "squiggly" => Rendering.squiggly_elements
+      case "line_background" => Rendering.line_background_elements
+      // strings, cartouches, antiquotes
+      case "foreground" => Rendering.foreground_elements
+      // used in output buffer
+      case "background" => Rendering.background_elements
+      case "bullet" => Rendering.bullet_elements
+      case "gutter" => Rendering.gutter_elements
+      case _ => text_color_elements
+      // there's other stuff we don't look at:
+      // spell checking, highlights, carets, completion and search highlight
+    }
+
+    snapshot.cumulate(range, "", elems, _ => {
+      case (_, Text.Info(_, elem)) => {
+        Some(elem.name)
+      }
+    })
+  }
 
   /* virtual bullets */
 
