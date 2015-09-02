@@ -77,7 +77,6 @@ object Token_Markup
   def subscript(i: Byte): Byte = { check_range(i); (i + plain_range).toByte }
   def superscript(i: Byte): Byte = { check_range(i); (i + 2 * plain_range).toByte }
   def bold(i: Byte): Byte = { check_range(i); (i + 3 * plain_range).toByte }
-  def user_font(idx: Int, i: Byte): Byte = { check_range(i); (i + (4 + idx) * plain_range).toByte }
   val hidden: Byte = (6 * plain_range).toByte
 
   private def font_style(style: SyntaxStyle, f: Font => Font): SyntaxStyle =
@@ -110,11 +109,6 @@ object Token_Markup
 
   class Style_Extender extends SyntaxUtilities.StyleExtender
   {
-    val max_user_fonts = 2
-    if (Symbol.font_names.length > max_user_fonts)
-      error("Too many user symbol fonts (" + max_user_fonts + " permitted): " +
-        Symbol.font_names.mkString(", "))
-
     override def extendStyles(styles: Array[SyntaxStyle]): Array[SyntaxStyle] =
     {
       val new_styles = new Array[SyntaxStyle](full_range)
@@ -130,16 +124,13 @@ object Token_Markup
         new_styles(subscript(i.toByte)) = script_style(style, -1)
         new_styles(superscript(i.toByte)) = script_style(style, 1)
         new_styles(bold(i.toByte)) = bold_style(style)
-        for (idx <- 0 until max_user_fonts)
-          new_styles(user_font(idx, i.toByte)) = style
-        for ((family, idx) <- Symbol.font_index)
-          new_styles(user_font(idx, i.toByte)) = font_style(style, GUI.imitate_font(_, family))
       }
+
       new_styles(hidden) =
         new SyntaxStyle(hidden_color, null,
           { val font = styles(0).getFont
-            GUI.transform_font(new Font(font.getFamily, 0, 1),
-              AffineTransform.getScaleInstance(1.0, font.getSize.toDouble)) })
+            GUI.transform_font(new Font(font.getFamily, 0, font.getSize),
+              AffineTransform.getScaleInstance(1.0/font.getSize.toDouble, 1.0)) })
       new_styles
     }
   }
@@ -168,10 +159,6 @@ object Token_Markup
           mark(offset, offset + sym.length, control_style(control).get)
         }
         control = ""
-      }
-      Symbol.lookup_font(sym) match {
-        case Some(idx) => mark(offset, offset + sym.length, user_font(idx, _))
-        case _ =>
       }
       offset += sym.length
     }

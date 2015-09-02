@@ -10,7 +10,7 @@ package isabelle.jedit
 
 import isabelle._
 
-import java.awt.{Graphics2D, Shape, Color, Point, Toolkit, Cursor, MouseInfo}
+import java.awt.{Graphics2D, Shape, Color, Point, Toolkit, Cursor, MouseInfo, Font}
 import java.awt.event.{MouseMotionAdapter, MouseAdapter, MouseEvent,
   FocusAdapter, FocusEvent, WindowEvent, WindowAdapter, InputEvent}
 import java.awt.font.TextAttribute
@@ -382,6 +382,50 @@ class Rich_Text_Area(
     }
   }
 
+  private class CustomChunk(line_start: Text.Offset, chunk: Chunk)
+  {
+    val offset : Text.Offset = line_start + chunk.offset
+    val str : String = if (chunk.str == null) " " * chunk.length else chunk.str
+    val astr : AttributedString = new AttributedString(str)
+
+    astr.addAttribute(TextAttribute.FONT, chunk.style.getFont)
+    astr.addAttribute(TextAttribute.FOREGROUND, chunk.style.getForegroundColor)
+
+    def addAttributeRange(range: Text.Range, attr: TextAttribute, o: Object) =
+      astr.addAttribute(attr, o, range.start - offset, range.stop - offset)
+
+    def addTextColorRange(range: Text.Range, color: Color) =
+      addAttributeRange(range, TextAttribute.FOREGROUND, color)
+
+    def draw(gfx: Graphics2D, x: Float , y: Float) =
+      gfx.drawString(astr.getIterator, x, y)
+
+    def deriveSubstFont(codepoint: Int): Font =
+    {
+      val mainFont = chunk.style.getFont()
+      Chunk.getSubstFont(codepoint) match {
+        case substFont: Font => Chunk.deriveSubstFont(mainFont, substFont)
+        case _ => mainFont
+      }
+    }
+
+    def doSubstFonts()
+    {
+      if (chunk.usedFontSubstitution()) {
+        val mainFont = chunk.style.getFont
+        var i = mainFont.canDisplayUpTo(astr.getIterator(), 0, str.length)
+
+        while (i >= 0 && i < str.length)
+        {
+          val next = str.offsetByCodePoints(i, 1)
+          val substFont = deriveSubstFont(str.codePointAt(i))
+          astr.addAttribute(TextAttribute.FONT, substFont, i, next)
+          i = mainFont.canDisplayUpTo(astr.getIterator(), next, str.length)
+        }
+      }
+    }
+  }
+
   private def paint_chunk_list(rendering: Rendering,
     gfx: Graphics2D, line_start: Text.Offset, head: Chunk, x: Float, y: Float): Float =
   {
@@ -395,66 +439,42 @@ class Rich_Text_Area(
 
     var w = 0.0f
     var chunk = head
+
     while (chunk != null) {
-      val chunk_offset = line_start + chunk.offset
+
       if (x + w + chunk.width > clip_rect.x &&
           x + w < clip_rect.x + clip_rect.width && chunk.length > 0)
       {
-        val chunk_range = Text.Range(chunk_offset, chunk_offset + chunk.length)
-        val chunk_str = if (chunk.str == null) " " * chunk.length else chunk.str
-        val chunk_font = chunk.style.getFont
-        val chunk_color = chunk.style.getForegroundColor
+        val cc = new CustomChunk(line_start, chunk)
 
-        def string_width(s: String): Float =
-          if (s.isEmpty) 0.0f
-          else chunk_font.getStringBounds(s, font_context).getWidth.toFloat
+        val chunk_offset = line_start + chunk.offset
+        val chunk_range = Text.Range(chunk_offset, chunk_offset + chunk.length)
 
         val markup =
           for {
-            r1 <- rendering.text_color(chunk_range, chunk_color)
+            r1 <- rendering.text_color(chunk_range, chunk.style.getForegroundColor)
             r2 <- r1.try_restrict(chunk_range)
           } yield r2
 
-        val padded_markup_iterator =
-          if (markup.isEmpty)
-            Iterator(Text.Info(chunk_range, chunk_color))
-          else
-            Iterator(
-              Text.Info(Text.Range(chunk_range.start, markup.head.range.start), chunk_color)) ++
-            markup.iterator ++
-            Iterator(Text.Info(Text.Range(markup.last.range.stop, chunk_range.stop), chunk_color))
+        // mark Isabelle colors
+        for (Text.Info(range, color) <- markup.iterator if !range.is_singularity)
+        {
+          cc.addTextColorRange(range, color)
 
-        var x1 = x + w
-        gfx.setFont(chunk_font)
-        for (Text.Info(range, color) <- padded_markup_iterator if !range.is_singularity) {
-          val str = chunk_str.substring(range.start - chunk_offset, range.stop - chunk_offset)
-          gfx.setColor(color)
-
+          // flip colors in cursor
           range.try_restrict(caret_range) match {
-            case Some(r) if !r.is_singularity =>
-              val i = r.start - range.start
-              val j = r.stop - range.start
-              val s1 = str.substring(0, i)
-              val s2 = str.substring(i, j)
-              val s3 = str.substring(j)
-
-              if (s1.nonEmpty) gfx.drawString(Word.bidi_override(s1), x1, y)
-
-              val astr = new AttributedString(Word.bidi_override(s2))
-              astr.addAttribute(TextAttribute.FONT, chunk_font)
-              astr.addAttribute(TextAttribute.FOREGROUND, caret_color(rendering, r.start))
-              astr.addAttribute(TextAttribute.SWAP_COLORS, TextAttribute.SWAP_COLORS_ON)
-              gfx.drawString(astr.getIterator, x1 + string_width(s1), y)
-
-              if (s3.nonEmpty)
-                gfx.drawString(Word.bidi_override(s3), x1 + string_width(str.substring(0, j)), y)
-
+            case Some(r) if !r.is_singularity => {
+              cc.addAttributeRange(r, TextAttribute.FOREGROUND, caret_color(rendering, r.start))
+              cc.addAttributeRange(r, TextAttribute.SWAP_COLORS, TextAttribute.SWAP_COLORS_ON)
+            }
             case _ =>
-              gfx.drawString(Word.bidi_override(str), x1, y)
           }
-          x1 += string_width(str)
         }
+
+        cc.doSubstFonts()
+        cc.draw(gfx, x + w, y)
       }
+
       w += chunk.width
       chunk = chunk.next.asInstanceOf[Chunk]
     }
