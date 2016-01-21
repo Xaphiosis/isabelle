@@ -28,6 +28,8 @@ object Font_Info {
 
   def main_family(): String = jEdit.getProperty("view.font")
 
+  def fallback_family(): String = "IsabelleText"
+
   def main_size(scale: Double = 1.0): Float =
     restrict_size(jEdit.getIntegerProperty("view.fontsize", 16).toFloat * scale.toFloat)
 
@@ -35,7 +37,6 @@ object Font_Info {
     Font_Info(main_family(), main_size(if (zoom == null) scale else scale * zoom.scale))
 
   class Zoom extends GUI.Zoom { tooltip = "Zoom factor for output font size" }
-
 
   /* incremental size change */
 
