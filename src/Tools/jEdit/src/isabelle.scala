@@ -255,6 +255,36 @@ object Isabelle
     load()
   }
 
+/* defer proofs */
+
+  private val DEFER_PROOFS = "defer_proofs"
+
+  def defer_proofs: Boolean = PIDE.options.bool(DEFER_PROOFS)
+
+  def defer_proofs_=(b: Boolean)
+  {
+    GUI_Thread.require()
+
+    if (defer_proofs != b) {
+      PIDE.options.bool(DEFER_PROOFS) = b
+      PIDE.options_changed()
+      PIDE.session.update_options(PIDE.options.value)
+      PIDE.editor.flush()
+    }
+  }
+
+  def set_defer_proofs() { defer_proofs = true }
+  def reset_defer_proofs() { defer_proofs = false }
+  def toggle_defer_proofs() { defer_proofs = !defer_proofs }
+
+  class Defer_Proofs extends CheckBox("Defer proofs")
+  {
+    tooltip = "Defer proof checking"
+    reactions += { case ButtonClicked(_) => defer_proofs = selected }
+    def load() { selected = defer_proofs }
+    load()
+  }
+
   /* required document nodes */
 
   private def node_required_update(view: View, toggle: Boolean = false, set: Boolean = false)

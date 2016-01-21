@@ -34,6 +34,8 @@ sig
   val type_error: transition -> string
   val name: string -> transition -> transition
   val position: Position.T -> transition -> transition
+  val set_open: transition -> transition
+  val set_close: transition -> transition
   val init_theory: (unit -> theory) -> transition -> transition
   val is_init: transition -> bool
   val modify_init: (unit -> theory) -> transition -> transition
@@ -62,12 +64,15 @@ sig
   val local_theory_to_proof: (bool * Position.T) option -> (xstring * Position.T) option ->
     (local_theory -> Proof.state) -> transition -> transition
   val theory_to_proof: (theory -> Proof.state) -> transition -> transition
+  val end_proof_deferred: (bool -> bool -> Proof.state -> Proof.context) -> (bool -> Proof.state -> Proof.context) -> transition -> transition
   val end_proof: (bool -> Proof.state -> Proof.context) -> transition -> transition
   val forget_proof: bool -> transition -> transition
   val proofs': (bool -> Proof.state -> Proof.state Seq.result Seq.seq) -> transition -> transition
   val proof': (bool -> Proof.state -> Proof.state) -> transition -> transition
   val proofs: (Proof.state -> Proof.state Seq.result Seq.seq) -> transition -> transition
+  val proof_init: (Proof.state -> Proof.state) -> transition -> transition
   val proof: (Proof.state -> Proof.state) -> transition -> transition
+  val proof_defer: (bool -> Proof.state -> Proof.state) -> transition -> transition
   val actual_proof: (Proof_Node.T -> Proof_Node.T) -> transition -> transition
   val skip_proof: (unit -> unit) -> transition -> transition
   val skip_proof_open: transition -> transition
@@ -100,10 +105,11 @@ exception UNDEF = Runtime.UNDEF;
 datatype node =
   Theory of generic_theory * Proof.context option
     (*theory with presentation context*) |
-  Proof of Proof_Node.T * ((Proof.context -> generic_theory) * generic_theory)
-    (*proof node, finish, original theory*) |
-  Skipped_Proof of int * (generic_theory * generic_theory);
-    (*proof depth, resulting theory, original theory*)
+  Proof of Proof_Node.T * ((Proof.context -> generic_theory) * generic_theory * generic_theory option)
+    (*proof node, finish, original theory, skipped theory result*) |
+  Skipped_Proof of int * (generic_theory * generic_theory)
+    (*proof depth, resulting theory, original theory*) |
+  Deferred_Proof of (Proof_Node.T * ((Proof_Node.T option -> Proof_Node.T) * int)) * ((Proof.context -> generic_theory) * generic_theory * (unit -> generic_theory) ) ;
 
 val theory_node = fn Theory (gthy, _) => SOME gthy | _ => NONE;
 val proof_node = fn Proof (prf, _) => SOME prf | _ => NONE;
@@ -111,7 +117,8 @@ val skipped_proof_node = fn Skipped_Proof _ => true | _ => false;
 
 fun cases_node f _ (Theory (gthy, _)) = f gthy
   | cases_node _ g (Proof (prf, _)) = g (Proof_Node.current prf)
-  | cases_node f _ (Skipped_Proof (_, (gthy, _))) = f gthy;
+  | cases_node f _ (Skipped_Proof (_, (gthy, _))) = f gthy
+  | cases_node _ g (Deferred_Proof ((prf, _), _)) = g (Proof_Node.current prf)
 
 val context_node = cases_node Context.proof_of Proof.context_of;
 
@@ -130,7 +137,8 @@ fun is_toplevel (State (NONE, _)) = true
 fun level (State (NONE, _)) = 0
   | level (State (SOME (Theory _), _)) = 0
   | level (State (SOME (Proof (prf, _)), _)) = Proof.level (Proof_Node.current prf)
-  | level (State (SOME (Skipped_Proof (d, _)), _)) = d + 1;   (*different notion of proof depth!*)
+  | level (State (SOME (Skipped_Proof (d, _)), _)) = d + 1
+  | level (State (SOME (Deferred_Proof ((_, (_, d)), _)), _)) = d + 1;   (*different notion of proof depth!*)
 
 fun str_of_state (State (NONE, SOME (Theory (Context.Theory thy, _)))) =
       "at top level, result theory " ^ quote (Context.theory_name thy)
@@ -138,7 +146,8 @@ fun str_of_state (State (NONE, SOME (Theory (Context.Theory thy, _)))) =
   | str_of_state (State (SOME (Theory (Context.Theory _, _)), _)) = "in theory mode"
   | str_of_state (State (SOME (Theory (Context.Proof _, _)), _)) = "in local theory mode"
   | str_of_state (State (SOME (Proof _), _)) = "in proof mode"
-  | str_of_state (State (SOME (Skipped_Proof _), _)) = "in skipped proof mode";
+  | str_of_state (State (SOME (Skipped_Proof _), _)) = "in skipped proof mode"
+  | str_of_state (State (SOME (Deferred_Proof _), _)) = "in deferred proof mode";
 
 
 (* current node *)
@@ -186,8 +195,9 @@ fun pretty_context state =
         val gthy =
           (case node of
             Theory (gthy, _) => gthy
-          | Proof (_, (_, gthy)) => gthy
-          | Skipped_Proof (_, (gthy, _)) => gthy);
+          | Proof (_, (_, gthy, _)) => gthy
+          | Skipped_Proof (_, (gthy, _)) => gthy
+          | Deferred_Proof (_, (_, gthy, _)) => gthy);
         val lthy = Context.cases (Named_Target.theory_init) I gthy;
       in Local_Theory.pretty lthy end);
 
@@ -196,7 +206,8 @@ fun pretty_state state =
     NONE => []
   | SOME (Theory _) => []
   | SOME (Proof (prf, _)) => Proof.pretty_state (Proof_Node.current prf)
-  | SOME (Skipped_Proof (d, _)) => [Pretty.str ("skipped proof: depth " ^ string_of_int d)]);
+  | SOME (Skipped_Proof (d, _)) => [Pretty.str ("skipped proof: depth " ^ string_of_int d)]
+  | SOME (Deferred_Proof ((_, (_, d)), _)) => [Pretty.str ("deferred proof: depth " ^ string_of_int d)]);
 
 val string_of_state = pretty_state #> Pretty.chunks #> Pretty.string_of;
 
@@ -283,25 +294,29 @@ end;
 
 (* datatype transition *)
 
+datatype proof_effect = Open_Proof | Close_Proof | Apply_Proof
+
 datatype transition = Transition of
  {name: string,              (*command name*)
   pos: Position.T,           (*source position*)
   timing: Time.time option,  (*prescient timing information*)
-  trans: trans list};        (*primitive transitions (union)*)
+  trans: trans list,
+  effect: proof_effect};        (*primitive transitions (union)*)
 
-fun make_transition (name, pos, timing, trans) =
-  Transition {name = name, pos = pos, timing = timing, trans = trans};
+fun make_transition (name, pos, timing, trans, effect) =
+  Transition {name = name, pos = pos, timing = timing, trans = trans, effect = effect};
 
-fun map_transition f (Transition {name, pos, timing, trans}) =
-  make_transition (f (name, pos, timing, trans));
+fun map_transition f (Transition {name, pos, timing, trans, effect}) =
+  make_transition (f (name, pos, timing, trans, effect));
 
-val empty = make_transition ("", Position.none, NONE, []);
+val empty = make_transition ("", Position.none, NONE, [], Apply_Proof);
 
 
 (* diagnostics *)
 
 fun name_of (Transition {name, ...}) = name;
 fun pos_of (Transition {pos, ...}) = pos;
+fun effect_of (Transition {effect, ...}) = effect;
 
 fun command_msg msg tr =
   msg ^ "command " ^ quote (Markup.markup Markup.keyword1 (name_of tr)) ^
@@ -313,17 +328,23 @@ fun type_error tr = command_msg "Bad context for " tr;
 
 (* modify transitions *)
 
-fun name name = map_transition (fn (_, pos, timing, trans) =>
-  (name, pos, timing, trans));
+fun name name = map_transition (fn (_, pos, timing, trans, effect) =>
+  (name, pos, timing, trans, effect));
 
-fun position pos = map_transition (fn (name, _, timing, trans) =>
-  (name, pos, timing, trans));
+fun position pos = map_transition (fn (name, _, timing, trans, effect) =>
+  (name, pos, timing, trans, effect));
 
-fun add_trans tr = map_transition (fn (name, pos, timing, trans) =>
-  (name, pos, timing, tr :: trans));
+fun add_trans tr = map_transition (fn (name, pos, timing, trans, effect) =>
+  (name, pos, timing, tr :: trans, effect));
 
-val reset_trans = map_transition (fn (name, pos, timing, _) =>
-  (name, pos, timing, []));
+val reset_trans = map_transition (fn (name, pos, timing, _, effect) =>
+  (name, pos, timing, [], effect));
+
+val set_open = map_transition (fn (name, pos, timing, trans, _) =>
+  (name, pos, timing, trans, Open_Proof));
+
+val set_close = map_transition (fn (name, pos, timing, trans, _) =>
+  (name, pos, timing, trans, Close_Proof));
 
 
 (* basic transitions *)
@@ -340,6 +361,8 @@ val keep' = add_trans o Keep;
 
 fun present_transaction f g = add_trans (Transaction (f, g));
 fun transaction f = present_transaction f (K ());
+
+fun transaction' f trans = present_transaction (f (effect_of trans)) (K ()) trans;
 
 fun keep f = add_trans (Keep (fn _ => f));
 
@@ -433,21 +456,75 @@ fun present_local_theory target = present_transaction (fn int =>
         in Theory (finish lthy, SOME lthy) end
     | _ => raise UNDEF));
 
+fun apply_effect Open_Proof   d = d + 1
+  | apply_effect Close_Proof  d = d - 1
+  | apply_effect Apply_Proof  d = d
 
 (* proof transitions *)
 
-fun end_proof f = transaction (fn int =>
-  (fn Proof (prf, (finish, _)) =>
-        let val state = Proof_Node.current prf in
+fun simple_end_proof f int prf finish gthy_skip =
+       let val state = Proof_Node.current prf in
           if can (Proof.assert_bottom true) state then
             let
-              val ctxt' = f int state;
+              val ctxt' = f false int state;
+              val gthy' = finish ctxt';
+              val gthy'' = case gthy_skip of SOME gthy => gthy | NONE => gthy'
+            in Theory (gthy'', SOME ctxt') end
+          else raise UNDEF
+        end
+   
+
+fun gen_end_proof can_defer g f = transaction (fn int =>
+  (fn Proof (prf, (finish, _, gthy_skip)) =>
+      simple_end_proof g int prf finish gthy_skip
+   | Skipped_Proof (0, (gthy, _)) => Theory (gthy, NONE)
+    | Deferred_Proof ((prf_init, (prf', 0)), (finish, _, _)) => 
+       if (not can_defer) then simple_end_proof g int (prf' (SOME prf_init)) finish NONE else
+        let
+   
+         val init_state = Proof_Node.current prf_init;
+         val pos = Position.thread_data ();
+
+         val future_state =
+           Proof.future_proof (fn state =>
+             Execution.fork
+               {name = "Toplevel.future_proof", pos = pos, pri = ~1}
+               (fn () =>
+                 let               
+                   val props = Markup.command_timing :: (Markup.nameN, "by") :: Position.properties_of pos;
+                   val init_node = SOME (Proof_Node.init state);
+                   val result = Timing.protocol props (fn prf' => g true int (Proof_Node.current (prf' init_node))) prf';
+                   val _ = prf' NONE;
+                 in ((), result) end)) init_state |> snd;
+          in
+          if can (Proof.assert_bottom true) future_state then
+            let
+              val ctxt' = f int future_state;
               val gthy' = finish ctxt';
             in Theory (gthy', SOME ctxt') end
           else raise UNDEF
         end
-    | Skipped_Proof (0, (gthy, _)) => Theory (gthy, NONE)
     | _ => raise UNDEF));
+
+fun end_proof_deferred g f = gen_end_proof true g f
+fun end_proof f = gen_end_proof false (K f) (fn _ => raise Fail "Can't defer here")
+
+fun do_memoize (new_ref : Proof_Node.T option Unsynchronized.ref) f (SOME init) = 
+ (case !new_ref of
+  SOME result => result
+| NONE => 
+  let
+    val result = f (SOME init);
+    val _ = new_ref := SOME result;
+  in result end)
+ | do_memoize new_ref f NONE =
+ (case !new_ref of
+  SOME result =>
+  let
+    val _ = new_ref := NONE;
+    val _ = f NONE;
+  in result end
+  | NONE => raise Fail "Attempt to clear already-empty cache")
 
 local
 
@@ -456,7 +533,9 @@ fun begin_proof init = transaction (fn int =>
     let
       val (finish, prf) = init int gthy;
       val skip = Goal.skip_proofs_enabled ();
+      val defer = Goal.defer_proofs_enabled ();
       val schematic_goal = try Proof.schematic_goal prf;
+      
       val _ =
         if skip andalso schematic_goal = SOME true then
           warning "Cannot skip proof of schematic goal statement"
@@ -464,7 +543,13 @@ fun begin_proof init = transaction (fn int =>
     in
       if skip andalso schematic_goal = SOME false then
         Skipped_Proof (0, (finish (Proof.global_skip_proof true prf), gthy))
-      else Proof (Proof_Node.init prf, (finish, gthy))
+      else if defer andalso schematic_goal = SOME false then
+        let 
+          val new_ref = Unsynchronized.ref (NONE : Proof_Node.T option);
+          val init = Proof_Node.init prf in
+          Deferred_Proof ((init, (do_memoize new_ref (the_default init), 0)), (finish, gthy, (fn () => finish (Proof.global_skip_proof true prf))))
+        end
+      else Proof (Proof_Node.init prf, (finish, gthy, NONE))
     end
   | _ => raise UNDEF));
 
@@ -493,26 +578,60 @@ fun theory_to_proof f = begin_proof
 end;
 
 fun forget_proof strict = transaction (fn _ =>
-  (fn Proof (prf, (_, orig_gthy)) =>
+  (fn Proof (prf, (_, orig_gthy, _)) =>
         if strict andalso not (Proof.has_bottom_goal (Proof_Node.current prf))
         then raise UNDEF else Theory (orig_gthy, NONE)
     | Skipped_Proof (_, (_, orig_gthy)) => Theory (orig_gthy, NONE)
+    | Deferred_Proof ((prf_init, (prf', _)), (_, orig_gthy, _)) =>
+        let val prf = prf' (SOME prf_init) in
+          if strict andalso not (Proof.has_bottom_goal (Proof_Node.current prf))
+          then raise UNDEF else Theory (orig_gthy, NONE)
+        end
     | _ => raise UNDEF));
 
-fun proofs' f = transaction (fn int =>
-  (fn Proof (prf, x) => Proof (Proof_Node.applys (f int) prf, x)
+
+ 
+
+
+fun gen_proofs' reinit f = transaction' (fn effect => fn int =>
+  (fn Proof (prf, x) => Proof (Proof_Node.applys (f false int) prf, x)
+    | Deferred_Proof ((prf_init, (prf', d)), (finish, gthy, gthy_skip)) => 
+      let
+        val new_ref = Unsynchronized.ref (NONE : Proof_Node.T option);
+
+        val (next_init, next_prf) = if reinit andalso d = 0 then 
+            let val prf = Proof_Node.applys (f true int) (prf' (SOME prf_init)) in 
+              (prf, do_memoize new_ref (the_default prf)) end
+         else (prf_init, fn init => Proof_Node.applys (f true int) (do_memoize new_ref prf' init))
+        val defer = Goal.defer_proofs_enabled ();
+      in
+        if defer then      
+          Deferred_Proof ((next_init, (next_prf , apply_effect effect d)), (finish, gthy, gthy_skip))
+        else
+          Proof (next_prf (SOME next_init), (finish, gthy, SOME (gthy_skip ())))
+      end
     | skip as Skipped_Proof _ => skip
     | _ => raise UNDEF));
 
+fun proofs' f = gen_proofs' false (K f);
 fun proof' f = proofs' ((Seq.single o Seq.Result) oo f);
 val proofs = proofs' o K;
 val proof = proof' o K;
+
+fun proof_defer f = gen_proofs' false (fn defer => fn int => (Seq.single o Seq.Result) o (f defer)); 
+fun proof_init f = gen_proofs' true (fn defer => fn int => Seq.single o Seq.Result o f);
 
 
 (* skipped proofs *)
 
 fun actual_proof f = transaction (fn _ =>
   (fn Proof (prf, x) => Proof (f prf, x)
+    | Deferred_Proof ((prf_init, (prf', d)), x) =>
+      let
+        val new_ref = Unsynchronized.ref (NONE : Proof_Node.T option);
+      in
+        Deferred_Proof ((prf_init, (fn init => f (do_memoize new_ref prf' init), d)),x)
+      end
     | _ => raise UNDEF));
 
 fun skip_proof f = transaction (fn _ =>
@@ -557,7 +676,7 @@ end;
 (* apply transitions *)
 
 fun get_timing (Transition {timing, ...}) = timing;
-fun put_timing timing = map_transition (fn (name, pos, _, trans) => (name, pos, timing, trans));
+fun put_timing timing = map_transition (fn (name, pos, _, trans, effect) => (name, pos, timing, trans, effect));
 
 local
 
@@ -710,10 +829,17 @@ fun element_result keywords (Thy_Syntax.Element (tr, NONE)) st = atom_result key
                   {name = "Toplevel.future_proof", pos = pos_of head_tr, pri = priority estimate}
                   (fn () =>
                     let
-                      val State (SOME (Proof (prf, (_, orig_gthy))), prev) = st';
+                      val (prf, orig_gthy, prev) = case st' of
+                         State (SOME (Proof (prf, (_, orig_gthy, _))), prev) => 
+                           (prf, orig_gthy, prev)
+                       | State (SOME (Deferred_Proof ((prf_init, (prf', _)), (_, orig_gthy, _))), prev) =>
+                           (prf' (SOME prf_init), orig_gthy, prev)
+                       | _ => raise Fail "Unexpected forked state" 
+                         
+                      
                       val prf' = Proof_Node.apply (K state) prf;
                       val (result, result_state) =
-                        State (SOME (Proof (prf', (finish, orig_gthy))), prev)
+                        State (SOME (Proof (prf', (finish, orig_gthy, NONE))), prev)
                         |> fold_map (element_result keywords) body_elems ||> command end_tr;
                     in (Result_List result, presentation_context_of result_state) end))
               #> (fn (res, state') => state' |> put_result (Result_Future res));

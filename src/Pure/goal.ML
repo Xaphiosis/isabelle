@@ -24,6 +24,7 @@ sig
   val finish: Proof.context -> thm -> thm
   val norm_result: Proof.context -> thm -> thm
   val skip_proofs_enabled: unit -> bool
+  val defer_proofs_enabled: unit -> bool
   val future_enabled: int -> bool
   val future_enabled_timing: Time.time -> bool
   val future_result: Proof.context -> thm future -> term -> thm
@@ -111,6 +112,14 @@ fun skip_proofs_enabled () =
       (warning "Proof terms enabled -- cannot skip proofs"; false)
     else skip
   end;
+
+fun defer_proofs_enabled () =
+  let val defer = Options.default_bool "defer_proofs" in
+    if Proofterm.proofs_enabled () andalso defer then
+      (warning "Proof terms enabled -- cannot defer proofs"; false)
+    else defer
+  end;
+
 
 val parallel_proofs = Unsynchronized.ref 1;
 

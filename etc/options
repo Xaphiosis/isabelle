@@ -86,6 +86,8 @@ public option quick_and_dirty : bool = false
   -- "if true then some tools will OMIT some proofs"
 public option skip_proofs : bool = false
   -- "skip over proofs (implicit 'sorry')"
+public option defer_proofs : bool = false
+  -- "defer proof processing"
 
 
 section "Global Session Parameters"
