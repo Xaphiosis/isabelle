@@ -191,8 +191,8 @@ fun parse_command thy =
         Toplevel.empty
         |> Toplevel.name name
         |> Toplevel.position pos
-        |> Keyword.is_proof_open keywords name ? Toplevel.skip_proof_open
-        |> Keyword.is_proof_close keywords name ? Toplevel.skip_proof_close;
+        |> Keyword.is_proof_open keywords name ? (Toplevel.skip_proof_open o Toplevel.set_open)
+        |> Keyword.is_proof_close keywords name ? (Toplevel.skip_proof_close o Toplevel.set_close);
     in
       (case lookup_commands thy name of
         SOME (Command {command_parser = Parser parse, ...}) =>
