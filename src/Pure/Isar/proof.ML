@@ -148,8 +148,8 @@ sig
   
   (* apply_trace hooks *)
 
-  val set_pre_apply_hook: (Proof.context -> thm -> thm) -> unit
-  val set_post_apply_hook: (Proof.context -> Method.text -> thm -> unit) -> unit   
+  val set_pre_apply_hook: (Proof.context -> Method.text -> thm -> thm) -> unit
+  val set_post_apply_hook: (Proof.context -> Method.text -> thm -> thm -> thm) -> unit   
 
   (* end apply_trace hooks *)
 
@@ -160,8 +160,10 @@ struct
 
 (* apply_trace hooks *)
 
-val pre_apply_hook = Unsynchronized.ref (fn (_ : Proof.context) => fn (thm : thm) => thm)
-val post_apply_hook = Unsynchronized.ref (fn (_ : Proof.context) => fn (_ : Method.text) => fn (_ : thm) => ())
+val pre_apply_hook = Unsynchronized.ref 
+  (fn (_ : Proof.context) => fn (_ : Method.text) => fn (thm : thm) => thm)
+val post_apply_hook = Unsynchronized.ref 
+ (fn (_ : Proof.context) => fn (_ : Method.text) => fn (_ : thm) => fn (thm : thm) => thm)
 
 fun set_pre_apply_hook f = pre_apply_hook := f;
 fun set_post_apply_hook f = post_apply_hook := f;
@@ -456,14 +458,14 @@ fun goal_cases ctxt st =
 
 fun apply_method text ctxt state =
   find_goal state |> (fn (goal_ctxt, {statement, using, goal, before_qed, after_qed}) =>
-    Method.evaluate text ctxt using (goal_ctxt, !pre_apply_hook ctxt goal)
+    Method.evaluate text ctxt using (goal_ctxt, !pre_apply_hook ctxt text goal)
     |> Seq.map_result (fn (goal_ctxt', goal') =>
       let
-        val _ = !post_apply_hook ctxt text goal';        
+        val goal'' = !post_apply_hook ctxt text goal goal';        
         val goal_ctxt'' = goal_ctxt'
           |> Proof_Context.update_cases_legacy (no_goal_cases goal @ goal_cases ctxt goal');
         val state' = state
-          |> map_goal (K (goal_ctxt'', statement, using, goal', before_qed, after_qed));
+          |> map_goal (K (goal_ctxt'', statement, using, goal'', before_qed, after_qed));
       in state' end));
 
 in
