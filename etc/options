@@ -88,6 +88,8 @@ public option skip_proofs : bool = false
   -- "skip over proofs (implicit 'sorry')"
 public option defer_proofs : bool = false
   -- "defer proof processing"
+public option quick_print : bool = false
+  -- "skip typed print translations when printing goal states"
 
 
 section "Global Session Parameters"
