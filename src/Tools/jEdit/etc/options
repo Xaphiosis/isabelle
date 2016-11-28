@@ -42,7 +42,7 @@ public option jedit_timing_threshold : real = 0.1
 
 section "Indentation"
 
-public option jedit_indent_newline : bool = true
+public option jedit_indent_newline : bool = false
   -- "indentation of Isabelle keywords on ENTER (action isabelle.newline)"
 
 public option jedit_indent_script : bool = true
