@@ -102,13 +102,6 @@ exception UNDEF = Runtime.UNDEF;
 
 (* datatype node *)
 
-datatype cache_clear_mode = CLEAR_ALL | CLEAR_REST | CLEAR_NONE
-
-fun step_clear CLEAR_REST = CLEAR_ALL
-  | step_clear x = x
-
-type memoize_val = {input : Proof_Node.T, cache_clear_mode : cache_clear_mode }
-
 datatype node =
   Theory of generic_theory * Proof.context option
     (*theory with presentation context*) |
@@ -116,16 +109,22 @@ datatype node =
     (*proof node, finish, original theory, skipped theory result*) |
   Skipped_Proof of int * (generic_theory * generic_theory)
     (*proof depth, resulting theory, original theory*) |
-  Deferred_Proof of (Proof_Node.T * ((memoize_val -> Proof_Node.T) * int)) * ((Proof.context -> generic_theory) * generic_theory * (unit -> generic_theory) ) ;
+  Deferred_Proof of (Proof_Node.T * ((Proof_Node.T -> Proof_Node.T) * int)) * ((Proof.context -> generic_theory) * generic_theory * (unit -> generic_theory) ) ;
 
 val theory_node = fn Theory (gthy, _) => SOME gthy | _ => NONE;
 val proof_node = fn Proof (prf, _) => SOME prf | _ => NONE;
 val skipped_proof_node = fn Skipped_Proof _ => true | _ => false;
+val deferred_proof_node = fn Deferred_Proof _ => true | _ => false;
 
 fun cases_node f _ (Theory (gthy, _)) = f gthy
   | cases_node _ g (Proof (prf, _)) = g (Proof_Node.current prf)
   | cases_node f _ (Skipped_Proof (_, (gthy, _))) = f gthy
   | cases_node _ g (Deferred_Proof ((prf, _), _)) = g (Proof_Node.current prf)
+
+fun cases_node' f _ (Theory (gthy, _)) = f gthy
+  | cases_node' _ g (Proof (prf, _)) = g (Proof_Node.current prf)
+  | cases_node' f _ (Skipped_Proof (_, (gthy, _))) = f gthy
+  | cases_node' _ g (Deferred_Proof ((init, (f, _)), _)) = g (Proof_Node.current (f init))
 
 val context_node = cases_node Context.proof_of Proof.context_of;
 
@@ -163,10 +162,15 @@ fun node_of (State (NONE, _)) = raise UNDEF
   | node_of (State (SOME node, _)) = node;
 
 fun is_theory state = not (is_toplevel state) andalso is_some (theory_node (node_of state));
-fun is_proof state = not (is_toplevel state) andalso is_some (proof_node (node_of state));
+
 fun is_skipped_proof state = not (is_toplevel state) andalso skipped_proof_node (node_of state);
+fun is_deferred_proof state = not (is_toplevel state) andalso deferred_proof_node (node_of state);
+fun is_real_proof state = not (is_toplevel state) andalso (is_some (proof_node (node_of state)));
+
+fun is_proof state = is_real_proof state orelse is_deferred_proof state;
 
 fun node_case f g state = cases_node f g (node_of state);
+fun node_case' f g state = cases_node' f g (node_of state);
 
 fun presentation_context_of state =
   (case try node_of state of
@@ -214,7 +218,7 @@ fun pretty_state state =
   | SOME (Theory _) => []
   | SOME (Proof (prf, _)) => Proof.pretty_state (Proof_Node.current prf)
   | SOME (Skipped_Proof (d, _)) => [Pretty.str ("skipped proof: depth " ^ string_of_int d)]
-  | SOME (Deferred_Proof ((_, (_, d)), _)) => [Pretty.str ("deferred proof: depth " ^ string_of_int d)]);
+  | SOME (Deferred_Proof ((init, (f, d)), _)) => Proof.pretty_state (Proof_Node.current (f init)));
 
 val string_of_state = pretty_state #> Pretty.chunks #> Pretty.string_of;
 
@@ -375,7 +379,8 @@ fun keep f = add_trans (Keep (fn _ => f));
 
 fun keep_proof f =
   keep (fn st =>
-    if is_proof st then f st
+    if is_real_proof st then f st
+    else if is_deferred_proof st then (warning "Deferred proof state might have stale context"; f st)
     else if is_skipped_proof st then ()
     else warning "No proof state");
 
@@ -486,7 +491,7 @@ fun gen_end_proof can_defer g f = transaction (fn int =>
       simple_end_proof g int prf finish gthy_skip
    | Skipped_Proof (0, (gthy, _)) => Theory (gthy, NONE)
     | Deferred_Proof ((prf_init, (prf', 0)), (finish, _, _)) => 
-       if (not can_defer) then simple_end_proof g int (prf' {input = prf_init, cache_clear_mode = CLEAR_REST}) finish NONE else
+       if (not can_defer) then simple_end_proof g int (prf' prf_init) finish NONE else
         let
    
          val init_state = Proof_Node.current prf_init;
@@ -499,9 +504,8 @@ fun gen_end_proof can_defer g f = transaction (fn int =>
                (fn () =>
                  let               
                    val props = Markup.command_timing :: (Markup.nameN, "by") :: Position.properties_of pos;
-                   val init_node = {input = Proof_Node.init state, cache_clear_mode = CLEAR_NONE};
+                   val init_node = Proof_Node.init state;
                    val result = Timing.protocol props (fn prf' => g true int (Proof_Node.current (prf' init_node))) prf';
-                   val _ = {input = Proof_Node.init state, cache_clear_mode = CLEAR_REST};
                  in ((), result) end)) init_state |> snd;
           in
           if can (Proof.assert_bottom true) future_state then
@@ -516,19 +520,27 @@ fun gen_end_proof can_defer g f = transaction (fn int =>
 fun end_proof_deferred g f = gen_end_proof true g f
 fun end_proof f = gen_end_proof false (K f) (fn _ => raise Fail "Can't defer here")
 
-
-fun do_memoize (new_ref : Proof_Node.T option Unsynchronized.ref) f (memoize_val : memoize_val) =
+fun do_memoize pos (new_ref : ((Proof_Node.T Exn.result) option) Unsynchronized.ref) f init =
   let
-    
+    fun do_markup m = Output.report [Markup.markup (Markup.properties (Position.properties_of pos) m) ""];
+
     val result =
       (case !new_ref of
-       SOME result => result
-     | NONE => f {input = #input memoize_val, cache_clear_mode = step_clear (#cache_clear_mode memoize_val)})
+       SOME (Exn.Res result) => Exn.Res result
+     | SOME (Exn.Exn e) => Exn.Exn e
+     | NONE => 
+        let
+           val _ = do_markup Markup.running;
+           val r = Exn.Res (f init) handle e => if Exn.is_interrupt e then Exn.reraise e else Exn.Exn e
+           val _ = do_markup Markup.finished;
+        in r end)
 
-    val _ = case #cache_clear_mode memoize_val of
-        CLEAR_ALL => new_ref := NONE
-      | _ => new_ref := SOME result
-  in result end
+    val _ = new_ref := SOME result;
+
+  in case result of Exn.Res result => result | 
+    Exn.Exn e =>
+      let val _ = do_markup Markup.error;
+      in Exn.reraise e end end
 
 local
 
@@ -549,9 +561,8 @@ fun begin_proof init = transaction (fn int =>
         Skipped_Proof (0, (finish (Proof.global_skip_proof true prf), gthy))
       else if defer andalso schematic_goal = SOME false then
         let 
-          val new_ref = Unsynchronized.ref (NONE : Proof_Node.T option);
           val init = Proof_Node.init prf in
-          Deferred_Proof ((init, (do_memoize new_ref (fn {input,...} => input), 0)), (finish, gthy, (fn () => finish (Proof.global_skip_proof true prf))))
+          Deferred_Proof ((init, (I, 0)), (finish, gthy, (fn () => finish (Proof.global_skip_proof true prf))))
         end
       else Proof (Proof_Node.init prf, (finish, gthy, NONE))
     end
@@ -587,7 +598,7 @@ fun forget_proof strict = transaction (fn _ =>
         then raise UNDEF else Theory (orig_gthy, NONE)
     | Skipped_Proof (_, (_, orig_gthy)) => Theory (orig_gthy, NONE)
     | Deferred_Proof ((prf_init, (prf', _)), (_, orig_gthy, _)) =>
-        let val prf = prf' {input = prf_init, cache_clear_mode = CLEAR_ALL} in
+        let val prf = prf' prf_init in
           if strict andalso not (Proof.has_bottom_goal (Proof_Node.current prf))
           then raise UNDEF else Theory (orig_gthy, NONE)
         end
@@ -597,25 +608,26 @@ fun forget_proof strict = transaction (fn _ =>
  
 
 
-fun gen_proofs' reinit f = transaction' (fn effect => fn int =>
+fun gen_proofs' reinit f tr = transaction' (fn effect => fn int =>
   (fn Proof (prf, x) => Proof (Proof_Node.applys (f false int) prf, x)
     | Deferred_Proof ((prf_init, (prf', d)), (finish, gthy, gthy_skip)) => 
       let
-        val new_ref = Unsynchronized.ref (NONE : Proof_Node.T option);
+        val new_ref = Unsynchronized.ref (NONE : (Proof_Node.T Exn.result) option);
+        val pos = pos_of tr;
 
         val (next_init, next_prf) = if reinit andalso d = 0 then 
-            let val prf = Proof_Node.applys (f true int) (prf' {input = prf_init, cache_clear_mode = CLEAR_ALL}) in 
-              (prf, do_memoize new_ref (fn {input,...} => input)) end
-         else (prf_init, fn init => Proof_Node.applys (f true int) (do_memoize new_ref prf' init))
+            let val prf = Proof_Node.applys (f true int) (prf' prf_init) in 
+              (prf, I) end
+         else (prf_init, fn init => do_memoize pos new_ref (Proof_Node.applys (f true int)) (prf' init))
         val defer = Goal.defer_proofs_enabled ();
       in
         if defer then      
           Deferred_Proof ((next_init, (next_prf , apply_effect effect d)), (finish, gthy, gthy_skip))
         else
-          Proof (next_prf {input = prf_init, cache_clear_mode = CLEAR_NONE}, (finish, gthy, SOME (gthy_skip ())))
+          Proof (next_prf prf_init, (finish, gthy, SOME (gthy_skip ())))
       end
     | skip as Skipped_Proof _ => skip
-    | _ => raise UNDEF));
+    | _ => raise UNDEF)) tr;
 
 fun proofs' f = gen_proofs' false (K f);
 fun proof' f = proofs' ((Seq.single o Seq.Result) oo f);
@@ -632,9 +644,10 @@ fun actual_proof f = transaction (fn _ =>
   (fn Proof (prf, x) => Proof (f prf, x)
     | Deferred_Proof ((prf_init, (prf', d)), x) =>
       let
-        val new_ref = Unsynchronized.ref (NONE : Proof_Node.T option);
+        val new_ref = Unsynchronized.ref (NONE : (Proof_Node.T Exn.result) option);
+        val pos = Position.thread_data ();
       in
-        Deferred_Proof ((prf_init, (fn init => f (do_memoize new_ref prf' init), d)),x)
+        Deferred_Proof ((prf_init, (fn init => do_memoize pos new_ref f (prf' init), d)),x)
       end
     | _ => raise UNDEF));
 
@@ -837,7 +850,7 @@ fun element_result keywords (Thy_Syntax.Element (tr, NONE)) st = atom_result key
                          State (SOME (Proof (prf, (_, orig_gthy, _))), prev) => 
                            (prf, orig_gthy, prev)
                        | State (SOME (Deferred_Proof ((prf_init, (prf', _)), (_, orig_gthy, _))), prev) =>
-                           (prf' {input = prf_init, cache_clear_mode = CLEAR_ALL}, orig_gthy, prev)
+                           (prf' prf_init, orig_gthy, prev)
                        | _ => raise Fail "Unexpected forked state" 
                          
                       
