@@ -83,8 +83,7 @@ fun try_tool_timeout state ((name, (_, auto, tool)): tool) = let
     val auto_time_limit = Options.default_real @{system_option auto_time_limit}
   in
     if Options.default_bool auto andalso auto_time_limit > 0.0 then
-       (case Timeout.apply (seconds auto_time_limit)
-             (try (tool true)) state of
+       (case try (Timeout.apply (seconds auto_time_limit) (tool true)) state of
          SOME (true, (kind, outcome)) => SOME (name, kind, outcome)
        | _ => NONE)
      else NONE
@@ -127,14 +126,14 @@ fun print_function ((name, (weight, auto, tool)): tool) =
           pri = ~ weight,
           persistent = true,
           strict = true,
-          print_fn = fn _ => fn st =>
+          print_fn = fn _ => ignore o try (fn st =>
             let
               val state = Toplevel.proof_of st
                 |> Proof.map_context (Context_Position.set_visible false)
             in case try_tool_timeout state (name, (weight, auto, tool))
               of SOME (_, _, outcome) => List.app Output.information outcome
                 | _ => ()
-            end}
+            end)}
       else NONE);
 
 (* hybrid tool setup *)
