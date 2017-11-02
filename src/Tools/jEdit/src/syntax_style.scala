@@ -62,11 +62,6 @@ object Syntax_Style
 
   object Extender extends SyntaxUtilities.StyleExtender
   {
-    val max_user_fonts = 2
-    if (Symbol.font_names.length > max_user_fonts)
-      error("Too many user symbol fonts (" + max_user_fonts + " permitted): " +
-        Symbol.font_names.mkString(", "))
-
     override def extendStyles(styles: Array[SyntaxStyle]): Array[SyntaxStyle] =
     {
       val style0 = styles(0)
@@ -79,15 +74,11 @@ object Syntax_Style
         new_styles(subscript(i.toByte)) = script_style(style, -1)
         new_styles(superscript(i.toByte)) = script_style(style, 1)
         new_styles(bold(i.toByte)) = bold_style(style)
-        for (idx <- 0 until max_user_fonts)
-          new_styles(user_font(idx, i.toByte)) = style
-        for ((family, idx) <- Symbol.font_index)
-          new_styles(user_font(idx, i.toByte)) = font_style(style, GUI.imitate_font(_, family))
       }
       new_styles(hidden) =
         new SyntaxStyle(hidden_color, null,
-          GUI.transform_font(new Font(font0.getFamily, 0, 1),
-            AffineTransform.getScaleInstance(1.0, font0.getSize.toDouble)))
+          GUI.transform_font(new Font(font0.getFamily, 0, font0.getSize),
+            AffineTransform.getScaleInstance(1.0/font0.getSize.toDouble, 1.0)))
       new_styles(control) =
         new SyntaxStyle(style0.getForegroundColor, style0.getBackgroundColor,
           { val font_style =
@@ -132,11 +123,6 @@ object Syntax_Style
         mark(offset, a, _ => hidden)
         mark(a, b, _ => control)
         mark(b, end_offset, _ => hidden)
-      }
-
-      Symbol.lookup_font(sym) match {
-        case Some(idx) => mark(offset, end_offset, user_font(idx, _))
-        case _ =>
       }
 
       offset = end_offset
