@@ -190,6 +190,8 @@ class Theories_Dockable(view: View, position: String) extends Dockable(view, pos
       val color =
         if (st == Document_Status.Overall_Node_Status.failed)
           PIDE.options.color_value("error_color")
+        else if (st != Document_Status.Overall_Node_Status.pending)
+          PIDE.options.color_value("processed_color")
         else label.foreground
       val thickness1 = if (st == Document_Status.Overall_Node_Status.pending) 1 else 2
       val thickness2 = 3 - thickness1
