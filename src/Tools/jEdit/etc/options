@@ -76,6 +76,7 @@ public option jedit_completion_immediate : bool = true
 section "Rendering of Document Content"
 
 option outdated_color : string = "EEE3E3FF"
+option processed_color : string = "099909FF"
 option unprocessed_color : string = "FFA0A0FF"
 option unprocessed1_color : string = "FFA0A032"
 option running_color : string = "610061FF"
