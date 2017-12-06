@@ -280,11 +280,10 @@ lemma bintrunc_mod2p: "bintrunc n w = w mod 2 ^ n"
 
 lemma sbintrunc_mod2p: "sbintrunc n w = (w + 2 ^ n) mod 2 ^ (Suc n) - 2 ^ n"
   apply (induct n arbitrary: w)
-   apply (auto simp add: bin_last_odd bin_rest_def Bit_def elim!: evenE oddE)
-   apply (smt pos_zmod_mult_2 zle2p)
-  apply (simp add: mult_mod_right)
+   apply (auto simp add: bin_last_odd bin_rest_def Bit_def emep1[symmetric]
+                         mult_mod_right
+       elim!: evenE oddE intro: arg_cong2[where f="op mod"])
   done
-
 
 subsection "Simplifications for (s)bintrunc"
 

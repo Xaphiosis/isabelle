@@ -9,7 +9,8 @@ theory Misc_Numeric
 begin
 
 lemma one_mod_exp_eq_one [simp]: "1 mod (2 * 2 ^ n) = (1::int)"
-  by (smt mod_pos_pos_trivial zero_less_power)
+  using power_strict_increasing[where a="2 :: int" and n=0 and N="Suc n"]
+  by (simp add: mod_pos_pos_trivial)
 
 lemma mod_2_neq_1_eq_eq_0: "k mod 2 \<noteq> 1 \<longleftrightarrow> k mod 2 = 0"
   for k :: int
