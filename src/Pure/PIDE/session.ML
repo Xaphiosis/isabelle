@@ -62,6 +62,7 @@ fun init symbols build info info_path doc doc_output doc_variants doc_files grap
 
 fun shutdown () =
  (Execution.shutdown ();
+  Timing_Report.shutdown ();
   Event_Timer.shutdown ();
   Future.shutdown ());
 

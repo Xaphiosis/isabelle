@@ -700,9 +700,9 @@ local
 fun app int (tr as Transition {trans, ...}) =
   setmp_thread_position tr (fn state =>
     let
-      val timing_start = Timing.start ();
+      val timing_start = Timing_Report.start (pos_of tr);
       val (result, opt_err) = apply_trans int trans state;
-      val timing_result = Timing.result timing_start;
+      val timing_result = Timing_Report.finish timing_start;
       val timing_props =
         Markup.command_timing :: (Markup.nameN, name_of tr) :: Position.properties_of (pos_of tr);
       val _ = Timing.protocol_message timing_props timing_result;
