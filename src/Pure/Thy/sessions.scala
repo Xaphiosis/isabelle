@@ -1023,7 +1023,9 @@ object Sessions
     /* directories */
 
     val system_output_dir: Path = Path.explode("$ISABELLE_HEAPS_SYSTEM/$ML_IDENTIFIER")
-    val user_output_dir: Path = Path.explode("$ISABELLE_HEAPS/$ML_IDENTIFIER")
+    val user_output_dir: Path =
+        if (Path.is_valid("$ISABELLE_OUTPUT")) Path.explode("$ISABELLE_OUTPUT")
+        else Path.explode("$ISABELLE_HEAPS/$ML_IDENTIFIER")
 
     val output_dir: Path =
       if (system_mode) system_output_dir else user_output_dir
