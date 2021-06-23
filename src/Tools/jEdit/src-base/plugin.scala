@@ -19,7 +19,7 @@ class Plugin extends EBPlugin
   {
     Isabelle_System.init()
 
-    GUI.use_isabelle_fonts()
+    // GUI.use_isabelle_fonts() RAF
 
     Debug.DISABLE_SEARCH_DIALOG_POOL = true
 
