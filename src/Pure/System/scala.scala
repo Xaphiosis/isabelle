@@ -81,6 +81,8 @@ object Scala
       val settings = new GenericRunnerSettings(error)
       settings.classpath.value =
         (class_path ::: jar_dirs.flatMap(find_jars)).mkString(JFile.pathSeparator)
+      // RAF: disable deprecation warnings in scala console
+      settings.deprecation.value = false
 
       new Context(settings)
     }
