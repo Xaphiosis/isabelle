@@ -418,9 +418,10 @@ class Rich_Text_Area(
     def get(codepoint: Int): Option[Font] =
       cache.getOrElse(codepoint,
         {
-          val field = classOf[Chunk].getDeclaredField("lastSubstFont")
-          field.setAccessible(true)
-          field.set(null, null)
+          // Raf's version of jEdit does not have lastSubstFont
+          // val field = classOf[Chunk].getDeclaredField("lastSubstFont")
+          // field.setAccessible(true)
+          // field.set(null, null)
           val res = Option(Chunk.getSubstFont(codepoint))
           cache += (codepoint -> res)
           res
